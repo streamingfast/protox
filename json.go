@@ -194,7 +194,59 @@ func (m *JSONMarshaller) fieldName(field protoreflect.FieldDescriptor) string {
 }
 
 func (m *JSONMarshaller) marshalValue(enc *jsontext.Encoder, field protoreflect.FieldDescriptor, value protoreflect.Value) error {
-	return m.marshalSingular(enc, field, value)
+	switch {
+	case field.IsMap():
+		return m.marshalMap(enc, field, value.Map())
+	case field.IsList():
+		return m.marshalList(enc, field, value.List())
+	default:
+		return m.marshalSingular(enc, field, value)
+	}
+}
+
+func (m *JSONMarshaller) marshalList(enc *jsontext.Encoder, field protoreflect.FieldDescriptor, list protoreflect.List) error {
+	if err := enc.WriteToken(jsontext.BeginArray); err != nil {
+		return err
+	}
+
+	for i := range list.Len() {
+		if err := m.marshalSingular(enc, field, list.Get(i)); err != nil {
+			return err
+		}
+	}
+
+	return enc.WriteToken(jsontext.EndArray)
+}
+
+func (m *JSONMarshaller) marshalMap(enc *jsontext.Encoder, field protoreflect.FieldDescriptor, mapping protoreflect.Map) error {
+	type mapEntry struct {
+		key   string
+		value protoreflect.Value
+	}
+
+	entries := make([]mapEntry, 0, mapping.Len())
+	mapping.Range(func(key protoreflect.MapKey, value protoreflect.Value) bool {
+		entries = append(entries, mapEntry{key: key.String(), value: value})
+		return true
+	})
+
+	slices.SortFunc(entries, func(a, b mapEntry) int { return strings.Compare(a.key, b.key) })
+
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if err := enc.WriteToken(jsontext.String(entry.key)); err != nil {
+			return err
+		}
+
+		if err := m.marshalSingular(enc, field.MapValue(), entry.value); err != nil {
+			return err
+		}
+	}
+
+	return enc.WriteToken(jsontext.EndObject)
 }
 
 func (m *JSONMarshaller) marshalSingular(enc *jsontext.Encoder, field protoreflect.FieldDescriptor, value protoreflect.Value) error {

@@ -133,3 +133,92 @@ func setField(t *testing.T, msg *dynamicpb.Message, name string, value protorefl
 
 	msg.Set(field, value)
 }
+
+// compositesMessage builds `protox.test.composites.Composites`, covering repeated scalars,
+// repeated messages, a scalar-valued map and a message-valued map, and returns an empty
+// dynamic instance of it.
+func compositesMessage(t *testing.T) *dynamicpb.Message {
+	t.Helper()
+
+	mapEntry := func(name string, valueType descriptorpb.FieldDescriptorProto_Type, valueTypeName string) *descriptorpb.DescriptorProto {
+		value := optionalField("value", 2, valueType)
+		if valueTypeName != "" {
+			value.TypeName = proto.String(valueTypeName)
+		}
+
+		return &descriptorpb.DescriptorProto{
+			Name:    proto.String(name),
+			Options: &descriptorpb.MessageOptions{MapEntry: proto.Bool(true)},
+			Field: []*descriptorpb.FieldDescriptorProto{
+				optionalField("key", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+				value,
+			},
+		}
+	}
+
+	repeated := func(name string, number int32, kind descriptorpb.FieldDescriptorProto_Type, typeName string) *descriptorpb.FieldDescriptorProto {
+		field := &descriptorpb.FieldDescriptorProto{
+			Name:   proto.String(name),
+			Number: proto.Int32(number),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+			Type:   kind.Enum(),
+		}
+		if typeName != "" {
+			field.TypeName = proto.String(typeName)
+		}
+
+		return field
+	}
+
+	file := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("protox/test/composites.proto"),
+		Syntax:  proto.String("proto3"),
+		Package: proto.String("protox.test.composites"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name: proto.String("Leaf"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					optionalField("label", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+				},
+			},
+			{
+				Name: proto.String("Composites"),
+				NestedType: []*descriptorpb.DescriptorProto{
+					mapEntry("ScoresEntry", descriptorpb.FieldDescriptorProto_TYPE_INT32, ""),
+					mapEntry("LeafByNameEntry", descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".protox.test.composites.Leaf"),
+				},
+				Field: []*descriptorpb.FieldDescriptorProto{
+					repeated("names", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, ""),
+					repeated("leaves", 2, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".protox.test.composites.Leaf"),
+					repeated("scores", 3, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".protox.test.composites.Composites.ScoresEntry"),
+					repeated("leaf_by_name", 4, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".protox.test.composites.Composites.LeafByNameEntry"),
+					{
+						Name:     proto.String("child"),
+						Number:   proto.Int32(5),
+						Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+						TypeName: proto.String(".protox.test.composites.Leaf"),
+					},
+				},
+			},
+		},
+	}
+
+	built, err := protodesc.NewFile(file, nil)
+	require.NoError(t, err)
+
+	return dynamicpb.NewMessage(built.Messages().ByName("Composites"))
+}
+
+// newLeaf builds a `protox.test.composites.Leaf` sharing msg's descriptor pool.
+func newLeaf(t *testing.T, msg *dynamicpb.Message, label string) protoreflect.Message {
+	t.Helper()
+
+	descriptor := msg.Descriptor().ParentFile().Messages().ByName("Leaf")
+	require.NotNil(t, descriptor)
+
+	leaf := dynamicpb.NewMessage(descriptor)
+	leaf.Set(descriptor.Fields().ByName("label"), protoreflect.ValueOfString(label))
+
+	return leaf
+}
