@@ -273,3 +273,10 @@ func newLeaf(t *testing.T, msg *dynamicpb.Message, label string) protoreflect.Me
 
 	return leaf
 }
+
+// dynamicpbMessageType returns a dynamic message type for the first message of file.
+func dynamicpbMessageType(t *testing.T, file protoreflect.FileDescriptor) protoreflect.MessageType {
+	t.Helper()
+
+	return dynamicpb.NewMessageType(file.Messages().Get(0))
+}

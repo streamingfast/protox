@@ -2,11 +2,14 @@ package protox
 
 import (
 	"encoding/json/jsontext"
+	"errors"
 	"fmt"
 	"math"
 	"time"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 const (
@@ -47,6 +50,8 @@ func (m *JSONMarshaller) marshalWellKnown(enc *jsontext.Encoder, msg protoreflec
 	}
 
 	switch name {
+	case wellKnownAny:
+		return true, m.marshalAny(enc, msg)
 	case wellKnownTimestamp:
 		return true, m.marshalTimestamp(enc, msg)
 	case wellKnownDuration:
@@ -164,6 +169,148 @@ func (m *JSONMarshaller) marshalFieldMask(enc *jsontext.Encoder, msg protoreflec
 
 func (m *JSONMarshaller) marshalEmptyObject(enc *jsontext.Encoder) error {
 	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return err
+	}
+
+	return enc.WriteToken(jsontext.EndObject)
+}
+
+// isHumanizedWellKnownMessage reports whether marshalWellKnown renders this message in a
+// humanized form, whose JSON is not necessarily an object.
+//
+// Built from the exact same constants and wellKnownWrappers map that marshalWellKnown
+// switches on, so the two cannot drift apart: adding a case to marshalWellKnown without
+// adding it here (or vice versa) is the only way to introduce a mismatch, and both live in
+// this same file next to each other.
+func isHumanizedWellKnownMessage(message protoreflect.MessageDescriptor) bool {
+	if message == nil {
+		return false
+	}
+
+	name := message.FullName()
+	if wellKnownWrappers[name] {
+		return true
+	}
+
+	switch name {
+	case wellKnownAny, wellKnownTimestamp, wellKnownDuration, wellKnownStruct, wellKnownValue,
+		wellKnownListValue, wellKnownFieldMask, wellKnownEmpty:
+		return true
+	}
+
+	return false
+}
+
+// marshalAny renders a google.protobuf.Any by resolving its payload and inlining the result
+// alongside an "@type" member.
+//
+// When the payload resolves to a humanized well-known type its JSON is not necessarily an
+// object, so it nests under a "value" member instead — the rule protojson uses. A
+// descriptorpb.* message, for instance, lives in the google.protobuf package but renders as
+// an ordinary JSON object, so it inlines rather than nesting.
+func (m *JSONMarshaller) marshalAny(enc *jsontext.Encoder, msg protoreflect.Message) error {
+	descriptor := msg.Descriptor()
+
+	var typeURL string
+	if field := descriptor.Fields().ByNumber(1); field != nil {
+		typeURL = msg.Get(field).String()
+	}
+
+	var payload []byte
+	if field := descriptor.Fields().ByNumber(2); field != nil {
+		payload = msg.Get(field).Bytes()
+	}
+
+	resolved, err := m.resolveAny(typeURL, payload)
+	if err != nil {
+		if m.config.strictAny {
+			return fmt.Errorf("resolving any %q: %w", typeURL, err)
+		}
+
+		return m.marshalDegradedAny(enc, typeURL, payload, err)
+	}
+
+	resolvedMessage := resolved.ProtoReflect()
+
+	if !m.config.anyTypeURL {
+		return m.marshalMessage(enc, resolvedMessage)
+	}
+
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return err
+	}
+
+	if err := enc.WriteToken(jsontext.String("@type")); err != nil {
+		return err
+	}
+
+	if err := enc.WriteToken(jsontext.String(typeURL)); err != nil {
+		return err
+	}
+
+	if isHumanizedWellKnownMessage(resolvedMessage.Descriptor()) {
+		if err := enc.WriteToken(jsontext.String("value")); err != nil {
+			return err
+		}
+
+		if err := m.marshalMessage(enc, resolvedMessage); err != nil {
+			return err
+		}
+	} else if err := m.marshalRegularMessageMembers(enc, resolvedMessage); err != nil {
+		return err
+	}
+
+	return enc.WriteToken(jsontext.EndObject)
+}
+
+func (m *JSONMarshaller) resolveAny(typeURL string, payload []byte) (proto.Message, error) {
+	messageType, err := m.resolver.FindMessageByURL(typeURL)
+	if err != nil {
+		if errors.Is(err, protoregistry.NotFound) {
+			return nil, errors.New("no type registered for URL")
+		}
+
+		return nil, err
+	}
+
+	message := messageType.New().Interface()
+	if err := proto.Unmarshal(payload, message); err != nil {
+		return nil, fmt.Errorf("unmarshalling payload: %w", err)
+	}
+
+	return message, nil
+}
+
+// marshalDegradedAny renders an unresolvable Any without failing the document, keeping the
+// raw payload so no information is silently dropped.
+func (m *JSONMarshaller) marshalDegradedAny(enc *jsontext.Encoder, typeURL string, payload []byte, cause error) error {
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return err
+	}
+
+	if m.config.anyTypeURL {
+		if err := enc.WriteToken(jsontext.String("@type")); err != nil {
+			return err
+		}
+
+		if err := enc.WriteToken(jsontext.String(typeURL)); err != nil {
+			return err
+		}
+	}
+
+	if err := enc.WriteToken(jsontext.String("@error")); err != nil {
+		return err
+	}
+
+	if err := enc.WriteToken(jsontext.String(cause.Error())); err != nil {
+		return err
+	}
+
+	if err := enc.WriteToken(jsontext.String("value")); err != nil {
+		return err
+	}
+
+	if err := m.config.bytesEncoder(enc, payload); err != nil {
 		return err
 	}
 
