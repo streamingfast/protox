@@ -132,6 +132,12 @@ func (m *JSONMarshaller) marshalRawBytes(enc *jsontext.Encoder, data []byte) err
 }
 
 func (m *JSONMarshaller) marshalMessage(enc *jsontext.Encoder, msg protoreflect.Message) error {
+	if !m.config.wellKnownAsProto {
+		if handled, err := m.marshalWellKnown(enc, msg); handled {
+			return err
+		}
+	}
+
 	return m.marshalRegularMessage(enc, msg)
 }
 
