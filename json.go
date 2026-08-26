@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -147,6 +148,12 @@ func (m *JSONMarshaller) marshalRegularMessage(enc *jsontext.Encoder, msg protor
 }
 
 func (m *JSONMarshaller) marshalRegularMessageMembers(enc *jsontext.Encoder, msg protoreflect.Message) error {
+	if m.config.unknownFields {
+		if err := m.marshalUnknownFields(enc, msg.GetUnknown()); err != nil {
+			return err
+		}
+	}
+
 	for _, field := range m.orderedFields(msg) {
 		if err := enc.WriteToken(jsontext.String(m.fieldName(field.descriptor))); err != nil {
 			return err
@@ -155,6 +162,47 @@ func (m *JSONMarshaller) marshalRegularMessageMembers(enc *jsontext.Encoder, msg
 		if err := m.marshalValue(enc, field.descriptor, field.value); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// marshalUnknownFields writes every unknown field in wire order as its own member. A
+// malformed buffer stops the scan and emits a single "__unknown_fields_error__" member
+// rather than failing the whole document.
+func (m *JSONMarshaller) marshalUnknownFields(enc *jsontext.Encoder, unknown protoreflect.RawFields) error {
+	if len(unknown) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]int)
+	remaining := []byte(unknown)
+
+	for len(remaining) > 0 {
+		number, wireType, length := protowire.ConsumeField(remaining)
+		if length < 0 {
+			if err := enc.WriteToken(jsontext.String("__unknown_fields_error__")); err != nil {
+				return err
+			}
+
+			return enc.WriteToken(jsontext.String(fmt.Sprintf("malformed unknown fields buffer: %s", protowire.ParseError(length))))
+		}
+
+		name := fmt.Sprintf("__unknown_fields_%d_with_type_%d__", number, wireType)
+		if occurrence := seen[name]; occurrence > 0 {
+			name = fmt.Sprintf("__unknown_fields_%d_with_type_%d_%d__", number, wireType, occurrence)
+		}
+		seen[fmt.Sprintf("__unknown_fields_%d_with_type_%d__", number, wireType)]++
+
+		if err := enc.WriteToken(jsontext.String(name)); err != nil {
+			return err
+		}
+
+		if err := m.config.bytesEncoder(enc, remaining[:length]); err != nil {
+			return err
+		}
+
+		remaining = remaining[length:]
 	}
 
 	return nil
