@@ -1,6 +1,7 @@
 package protox_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,8 +12,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -143,20 +144,52 @@ func TestJSONMarshaller_nonStringMapKeyParity(t *testing.T) {
 func TestJSONMarshaller_concurrentUse(t *testing.T) {
 	marshaller := protox.NewJSONMarshaller()
 
-	value, err := structpb.NewStruct(map[string]any{"chain": "eth", "depth": 3})
-	require.NoError(t, err)
-
 	// testFileDescriptor calls t.Helper() and require, neither of which is safe to call from
 	// a non-test goroutine, so the descriptors are built here on the test goroutine and the
-	// background goroutine below only calls protox.RegisterAnyTypes.
+	// background goroutine below only calls protox.RegisterAnyTypes. Each of the 50 types
+	// gets a genuinely unique full name (index-suffixed, not letter-cycled modulo 26) so none
+	// of the registrations collides with an earlier one from the same run — a collision would
+	// silently exercise RegisterAnyTypes' keep-first-and-warn branch by accident rather than
+	// by intent, and that branch already has dedicated coverage in registry_test.go.
 	messageTypes := make([]protoreflect.MessageType, 50)
 	for i := range 50 {
 		file := testFileDescriptor(t,
-			"protox/test/concurrent_"+string(rune('a'+i%26))+".proto",
-			"protox.test.concurrent"+string(rune('a'+i%26)),
+			fmt.Sprintf("protox/test/concurrent_%02d.proto", i),
+			fmt.Sprintf("protox.test.concurrent%02d", i),
 			"Sample", "value")
 		messageTypes[i] = dynamicpb.NewMessageType(file.Messages().Get(0))
 	}
+
+	// The value every marshalling goroutine renders is a google.protobuf.Any pointing at the
+	// *last-registered* type's full name — the same protox registry the writer goroutine below
+	// is populating. This is what actually exercises anyTypesMutex under contention:
+	// marshalAny -> resolveAny -> m.resolver.FindMessageByURL takes the registry's read lock,
+	// concurrently with RegisterAnyTypes' write lock, for every one of the 50 marshal calls
+	// below. Targeting the *last* registered type (rather than the first) gives resolution a
+	// chance to depend on the writer's progress instead of succeeding trivially from the
+	// writer's very first loop iteration.
+	//
+	// An earlier version of this test marshalled a plain *structpb.Struct, which never reaches
+	// the resolver at all — marshalStruct has no reason to consult m.resolver — so the
+	// registry mutex only ever saw sequential single-goroutine writes and that test would have
+	// kept passing even if the mutex were deleted from registry.go outright.
+	//
+	// Whether a given marshal call observes the type as already registered is a race against
+	// the writer goroutine's progress that this test deliberately does not control or force:
+	// depending on how fast the write loop runs relative to goroutine scheduling on a given
+	// machine, every read may consistently land on one side or actually split between both.
+	// Either way is a legitimate outcome, so the assertion below accepts either rendering
+	// rather than pinning one exact string, which would risk flaking under -race or on a
+	// different machine.
+	typeURL := "type.googleapis.com/" + string(messageTypes[len(messageTypes)-1].Descriptor().FullName())
+	// Field 1, a string named "value", wire-encoded as a length-delimited "hi" — the same
+	// encoding json_any_test.go uses for its "Sample"/"value" fixture.
+	payload := []byte{0x0a, 0x02, 0x68, 0x69}
+	value := &anypb.Any{TypeUrl: typeURL, Value: payload}
+
+	resolvedJSON := fmt.Sprintf(`{"@type":%q,"value":"hi"}`, typeURL)
+	degradedJSON := fmt.Sprintf(`{"@type":%q,"@error":"no type registered for URL","value":"0a026869"}`, typeURL)
+	acceptable := []string{resolvedJSON, degradedJSON}
 
 	done := make(chan struct{})
 
@@ -178,7 +211,7 @@ func TestJSONMarshaller_concurrentUse(t *testing.T) {
 	}
 
 	for range 50 {
-		assert.Equal(t, `{"chain":"eth","depth":3}`, <-results)
+		assert.Contains(t, acceptable, <-results)
 	}
 
 	<-done
