@@ -280,3 +280,58 @@ func dynamicpbMessageType(t *testing.T, file protoreflect.FileDescriptor) protor
 
 	return dynamicpb.NewMessageType(file.Messages().Get(0))
 }
+
+// mapKeysMessage builds `protox.test.mapkeys.MapKeys`, covering a non-string-keyed map
+// (map<int32, string>) and a bool-keyed map (map<bool, string>), and returns an empty
+// dynamic instance of it. Every other map fixture in this package (compositesMessage's
+// "scores" and "leaf_by_name") uses a string key, so marshalMap's use of
+// protoreflect.MapKey.String() to build JSON object member names for non-string key kinds
+// was otherwise never exercised.
+func mapKeysMessage(t *testing.T) *dynamicpb.Message {
+	t.Helper()
+
+	mapEntry := func(name string, keyType descriptorpb.FieldDescriptorProto_Type) *descriptorpb.DescriptorProto {
+		return &descriptorpb.DescriptorProto{
+			Name:    proto.String(name),
+			Options: &descriptorpb.MessageOptions{MapEntry: proto.Bool(true)},
+			Field: []*descriptorpb.FieldDescriptorProto{
+				optionalField("key", 1, keyType),
+				optionalField("value", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+			},
+		}
+	}
+
+	file := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("protox/test/mapkeys.proto"),
+		Syntax:  proto.String("proto3"),
+		Package: proto.String("protox.test.mapkeys"),
+		MessageType: []*descriptorpb.DescriptorProto{{
+			Name: proto.String("MapKeys"),
+			NestedType: []*descriptorpb.DescriptorProto{
+				mapEntry("ByInt32Entry", descriptorpb.FieldDescriptorProto_TYPE_INT32),
+				mapEntry("ByBoolEntry", descriptorpb.FieldDescriptorProto_TYPE_BOOL),
+			},
+			Field: []*descriptorpb.FieldDescriptorProto{
+				{
+					Name:     proto.String("by_int32"),
+					Number:   proto.Int32(1),
+					Label:    descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+					Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+					TypeName: proto.String(".protox.test.mapkeys.MapKeys.ByInt32Entry"),
+				},
+				{
+					Name:     proto.String("by_bool"),
+					Number:   proto.Int32(2),
+					Label:    descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+					Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+					TypeName: proto.String(".protox.test.mapkeys.MapKeys.ByBoolEntry"),
+				},
+			},
+		}},
+	}
+
+	built, err := protodesc.NewFile(file, nil)
+	require.NoError(t, err)
+
+	return dynamicpb.NewMessage(built.Messages().ByName("MapKeys"))
+}
