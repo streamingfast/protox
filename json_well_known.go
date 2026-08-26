@@ -3,6 +3,7 @@ package protox
 import (
 	"encoding/json/jsontext"
 	"fmt"
+	"math"
 	"time"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -91,9 +92,22 @@ func (m *JSONMarshaller) marshalDuration(enc *jsontext.Encoder, msg protoreflect
 		nanos = msg.Get(field).Int()
 	}
 
-	// time.Duration is an int64 nanosecond count, overflowing beyond roughly 292 years.
-	const maxDurationSeconds = int64(1<<63-1) / int64(time.Second)
-	if seconds > maxDurationSeconds || seconds < -maxDurationSeconds {
+	// time.Duration is an int64 nanosecond count, overflowing beyond roughly 292 years. The
+	// budget must be checked against the combined seconds+nanos value, not just whole
+	// seconds: at the exact boundary second, only part of the nanosecond range still fits
+	// without wrapping the int64 multiplication/addition below.
+	const (
+		maxDurationSeconds      = math.MaxInt64 / int64(time.Second)
+		maxDurationNanosAtBound = math.MaxInt64 - maxDurationSeconds*int64(time.Second)
+		minDurationSeconds      = math.MinInt64 / int64(time.Second)
+		minDurationNanosAtBound = math.MinInt64 - minDurationSeconds*int64(time.Second)
+	)
+
+	overflow := seconds > maxDurationSeconds || seconds < minDurationSeconds ||
+		(seconds == maxDurationSeconds && nanos > maxDurationNanosAtBound) ||
+		(seconds == minDurationSeconds && nanos < minDurationNanosAtBound)
+
+	if overflow {
 		return enc.WriteToken(jsontext.String(fmt.Sprintf("%ds", seconds)))
 	}
 

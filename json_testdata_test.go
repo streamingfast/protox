@@ -7,8 +7,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
+	_ "google.golang.org/protobuf/types/known/timestamppb"
+	_ "google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // optionalField builds a field using the proto3 `optional` keyword (real presence tracking,
@@ -132,6 +135,54 @@ func setField(t *testing.T, msg *dynamicpb.Message, name string, value protorefl
 	require.NotNil(t, field, "field %q not found on %s", name, msg.Descriptor().FullName())
 
 	msg.Set(field, value)
+}
+
+// wellKnownFieldsMessage builds `protox.test.wellknown.Carrier`, an ordinary message — not
+// itself under the google.protobuf package — carrying two fields whose types are google.protobuf
+// well-known types: a Timestamp and a BoolValue wrapper. It exists to prove that well-known
+// humanization recurses into fields of a regular message, not only into other well-known types
+// (a google.protobuf.Struct wrapping a google.protobuf.Value, for instance).
+//
+// protodesc.NewFile is given protoregistry.GlobalFiles as its resolver so it can look up the
+// google/protobuf/timestamp.proto and google/protobuf/wrappers.proto dependencies declared
+// below; those files are registered globally as a side effect of importing timestamppb and
+// wrapperspb, which this file does.
+func wellKnownFieldsMessage(t *testing.T) *dynamicpb.Message {
+	t.Helper()
+
+	file := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("protox/test/wellknown.proto"),
+		Syntax:  proto.String("proto3"),
+		Package: proto.String("protox.test.wellknown"),
+		Dependency: []string{
+			"google/protobuf/timestamp.proto",
+			"google/protobuf/wrappers.proto",
+		},
+		MessageType: []*descriptorpb.DescriptorProto{{
+			Name: proto.String("Carrier"),
+			Field: []*descriptorpb.FieldDescriptorProto{
+				{
+					Name:     proto.String("happened_at"),
+					Number:   proto.Int32(1),
+					Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+					TypeName: proto.String(".google.protobuf.Timestamp"),
+				},
+				{
+					Name:     proto.String("is_active"),
+					Number:   proto.Int32(2),
+					Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+					TypeName: proto.String(".google.protobuf.BoolValue"),
+				},
+			},
+		}},
+	}
+
+	built, err := protodesc.NewFile(file, protoregistry.GlobalFiles)
+	require.NoError(t, err)
+
+	return dynamicpb.NewMessage(built.Messages().Get(0))
 }
 
 // compositesMessage builds `protox.test.composites.Composites`, covering repeated scalars,
