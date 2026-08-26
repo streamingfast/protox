@@ -84,6 +84,45 @@ func scalarsMessage(t *testing.T) *dynamicpb.Message {
 	return dynamicpb.NewMessage(built.Messages().Get(0))
 }
 
+// implicitField builds an ordinary proto3 scalar field — no `optional` keyword, so it has
+// implicit presence: protoreflect.Message.Has/Range treat the field as absent whenever it
+// holds its zero value. This is the common shape of a bare `bool foo = 1;` declaration, as
+// opposed to optionalField's explicit-presence `optional` fields.
+func implicitField(name string, number int32, kind descriptorpb.FieldDescriptorProto_Type) *descriptorpb.FieldDescriptorProto {
+	return &descriptorpb.FieldDescriptorProto{
+		Name:   proto.String(name),
+		Number: proto.Int32(number),
+		Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+		Type:   kind.Enum(),
+	}
+}
+
+// implicitPresenceMessage builds `protox.test.implicit.Implicit`, a message with ordinary
+// (non-`optional`) scalar fields, and returns an empty dynamic instance of it. It exists
+// alongside scalarsMessage specifically to exercise implicit-presence semantics: a zero-value
+// field must be omitted from JSON output, unlike scalarsMessage's explicit-presence fields.
+func implicitPresenceMessage(t *testing.T) *dynamicpb.Message {
+	t.Helper()
+
+	file := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("protox/test/implicit.proto"),
+		Syntax:  proto.String("proto3"),
+		Package: proto.String("protox.test.implicit"),
+		MessageType: []*descriptorpb.DescriptorProto{{
+			Name: proto.String("Implicit"),
+			Field: []*descriptorpb.FieldDescriptorProto{
+				implicitField("name", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+				implicitField("count", 2, descriptorpb.FieldDescriptorProto_TYPE_INT32),
+			},
+		}},
+	}
+
+	built, err := protodesc.NewFile(file, nil)
+	require.NoError(t, err)
+
+	return dynamicpb.NewMessage(built.Messages().Get(0))
+}
+
 // setField sets a field by name on a dynamic message, failing the test when the field is
 // absent from the descriptor.
 func setField(t *testing.T, msg *dynamicpb.Message, name string, value protoreflect.Value) {

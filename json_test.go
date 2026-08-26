@@ -70,6 +70,21 @@ func TestJSONMarshaller_fieldOrdering(t *testing.T) {
 	})
 }
 
+func TestJSONMarshaller_implicitPresenceOmitsZeroValue(t *testing.T) {
+	// Ordinary (non-`optional`) proto3 scalar fields have implicit presence: a field left at
+	// its zero value is indistinguishable from an unset one and protoreflect.Message.Range
+	// skips it. This must hold end to end through the marshaller, not just at the descriptor
+	// level, since scalarsMessage's fixture uses explicit-presence fields everywhere else.
+	msg := implicitPresenceMessage(t)
+	setField(t, msg, "count", protoreflect.ValueOfInt32(7))
+	// "name" is left at its zero value ("") and must be omitted.
+
+	out, err := protox.ToJSONString(msg)
+	require.NoError(t, err)
+
+	assert.Equal(t, `{"count":7}`, out)
+}
+
 func TestJSONMarshaller_options(t *testing.T) {
 	msg := scalarsMessage(t)
 	setField(t, msg, "a_bytes", protoreflect.ValueOfBytes([]byte{0x00, 0x01, 0xff}))
@@ -217,6 +232,18 @@ func TestJSONMarshaller_indent(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "{\n  \"a_bool\": true\n}", out)
+}
+
+func TestJSONMarshaller_invalidIndent(t *testing.T) {
+	msg := scalarsMessage(t)
+	setField(t, msg, "a_bool", protoreflect.ValueOfBool(true))
+
+	// "- " contains a non-space, non-tab character; jsontext.WithIndent would panic on it,
+	// so WithJSONIndent must reject it and fall back to compact output instead of crashing.
+	out, err := protox.ToJSONString(msg, protox.WithJSONIndent("- "))
+	require.NoError(t, err)
+
+	assert.Equal(t, `{"a_bool":true}`, out)
 }
 
 func TestJSONMarshaller_nonProtoValues(t *testing.T) {

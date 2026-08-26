@@ -3,7 +3,9 @@ package protox
 import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+	"strings"
 
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
@@ -112,9 +114,19 @@ func WithoutJSONUnknownFields() JSONMarshallerOption {
 }
 
 // WithJSONIndent pretty-prints the output using the received indentation, which must be
-// composed only of spaces or only of tabs.
+// composed only of spaces and tabs — the same rule jsontext.WithIndent enforces internally,
+// except we degrade instead of panicking: an invalid indent is ignored (a warning is logged)
+// and the output stays compact.
 func WithJSONIndent(indent string) JSONMarshallerOption {
 	return func(config *jsonMarshallerConfig) {
+		if strings.Trim(indent, " \t") != "" {
+			zlog.Warn("invalid JSON indent, must contain only spaces and tabs, ignoring and keeping compact output",
+				zap.String("indent", indent),
+			)
+
+			return
+		}
+
 		config.indent = indent
 		config.hasIndent = true
 	}
