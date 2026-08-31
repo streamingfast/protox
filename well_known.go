@@ -16,3 +16,9 @@ func IsWellKnownTimestampField(field protoreflect.FieldDescriptor) bool {
 func IsWellKnownGoogleField(field protoreflect.FieldDescriptor) bool {
 	return field.Kind() == protoreflect.MessageKind && strings.HasPrefix(string(field.Message().FullName()), "google.protobuf.")
 }
+
+// IsWellKnownGoogleMessage returns true when the message descriptor is one of the
+// google.protobuf.* well-known types.
+func IsWellKnownGoogleMessage(message protoreflect.MessageDescriptor) bool {
+	return message != nil && strings.HasPrefix(string(message.FullName()), "google.protobuf.")
+}

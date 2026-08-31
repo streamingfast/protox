@@ -1,8 +1,9 @@
 module github.com/streamingfast/protox
 
-go 1.25
+go 1.27
 
 require (
+	github.com/mr-tron/base58 v1.3.0
 	github.com/streamingfast/logging v1.2.2
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/zap v1.28.0

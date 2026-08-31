@@ -9,7 +9,8 @@ Used internally at [StreamingFast](https://streamingfast.io) across Firehose and
 go get github.com/streamingfast/protox
 ```
 
-Requires Go 1.22+.
+Requires Go 1.27+, for `encoding/json/v2`. No `GOEXPERIMENT` flag is needed —
+`encoding/json/v2` ships enabled by default starting with Go 1.27.
 
 ## API
 
@@ -114,6 +115,112 @@ value, found := protox.GetFieldExtensionValue[bool](fieldDesc, myFieldExtension,
 ```
 
 `found` is `false` when the extension is absent; `value` is then `defaultIfUnset`.
+
+### JSON marshalling
+
+Render Protobuf messages as human-readable JSON, built on Go 1.27's `encoding/json/v2`.
+
+This is **not** a `protojson` replacement — the output is deliberately lossy and not
+round-trippable. Reach for `protojson` when the proto3 JSON specification matters, and for
+protox when a person is going to read the result. It exists to replace
+`github.com/streamingfast/firehose-core`'s JSON marshaller, whose Go-struct-reflection
+approach cannot treat a generated message and a `*dynamicpb.Message` built from the same
+descriptor identically; protox's marshaller renders both to byte-identical JSON.
+
+```go
+out, err := protox.ToJSONString(block)
+```
+
+Reuse a marshaller on hot paths — building one does setup work not worth repeating per
+message:
+
+```go
+marshaller := protox.NewJSONMarshaller(
+    protox.WithJSONBytesEncoding(protox.BytesEncodingBase58),
+    protox.WithJSONIndent("  "),
+)
+
+err := marshaller.MarshalWrite(os.Stdout, block)
+```
+
+`JSONMarshaller` also exposes `Marshal`, `MarshalToString` and `MarshalEncode` (the last takes
+a caller-owned `*jsontext.Encoder`, for when the caller wants to control formatting options
+directly). A `JSONMarshaller` is immutable once built and safe for concurrent use.
+
+`WithJSONIndent` validates its argument: an indent must be composed only of spaces and tabs,
+the same rule `jsontext.WithIndent` enforces internally. Passing anything else does not
+panic — it is ignored (a warning is logged) and the output stays compact.
+
+**Defaults**
+
+| Aspect | Default | Option |
+|---|---|---|
+| Field names | declared name (`block_num`) | `WithJSONFieldCamelCase()` (`blockNum`) |
+| Field order | ascending field number, i.e. `.proto` declaration order in the common case | `WithJSONAlphabeticalFields()` |
+| Enums | value name (`"STEP_NEW"`) | `WithJSONEnumsAsNumbers()` |
+| Bytes | hexadecimal | `WithJSONBytesEncoding(...)`, `WithJSONBytesEncoder(...)` |
+| 64-bit integers | JSON numbers | `WithJSONInt64AsString()` |
+| `Timestamp` / `Duration` / wrappers / `Struct` / `Value` / `ListValue` / `Empty` / `FieldMask` | humanized (e.g. `Timestamp` as an RFC 3339 string) | `WithJSONWellKnownAsProto()` (literal Protobuf fields, e.g. `{"seconds":…,"nanos":…}`) |
+| `Any` | resolved and inlined with `@type` (see below) | `WithoutJSONAnyTypeURL()` |
+| Unresolvable `Any` | degraded object: `@type` (if enabled), `@error`, and the raw payload under `value` | `WithJSONStrictAny()` (fail instead) |
+| Unknown fields | rendered as `__unknown_fields_<field number>_with_type_<wire type>__` | `WithoutJSONUnknownFields()` |
+| Unset fields | omitted (proto3 fields without explicit presence are indistinguishable from their zero value and are omitted too) | — |
+| `NaN` / `±Inf` | `"NaN"` / `"Infinity"` / `"-Infinity"` | — |
+
+**`Any` rendering in detail**
+
+A resolved `Any` payload is inlined as a sibling of `@type` when it renders as a JSON object:
+
+```json
+{"@type":"type.googleapis.com/google.protobuf.FieldDescriptorProto","name":"block_num","number":3}
+```
+
+It nests under a `value` member instead when the payload is one of the humanized well-known
+types above, whose JSON is not necessarily an object (a `Timestamp`, for instance, renders as
+a bare string):
+
+```json
+{"@type":"type.googleapis.com/google.protobuf.Timestamp","value":"2026-08-25T14:03:11Z"}
+```
+
+Note that `descriptorpb.*` messages (`FileDescriptorProto` and friends) live in the
+`google.protobuf` package but are **not** humanized by this marshaller, so they take the
+inline form, not the nested one.
+
+**Resolving `Any` payloads**
+
+Register the types your `Any` values can hold, typically once at startup:
+
+```go
+func init() {
+    protox.RegisterAnyFiles(myDescriptorFiles) // *protoregistry.Files
+    // or
+    protox.RegisterAnyTypes(myMessageTypes...) // ...protoreflect.MessageType
+}
+```
+
+This registry is private to protox — it never writes to `protoregistry.GlobalTypes`, so it
+has no effect on ordinary proto unmarshalling. Registering the same type twice is a no-op;
+two different descriptors under one name keeps the first and logs a warning.
+
+Resolution order is `WithJSONAnyResolver(...)` → the protox registry →
+`protoregistry.GlobalTypes`. `WithJSONAnyResolverOverride(...)` replaces the chain entirely.
+
+The registry is reusable outside of JSON:
+
+```go
+messageType, err := protox.AnyTypeResolver().FindMessageByURL(value.TypeUrl)
+```
+
+`protox.ChainTypeResolvers(...)` composes any number of `protoregistry.MessageTypeResolver`
+values, which `google.golang.org/protobuf` does not offer on its own.
+
+**Bytes encoding outside JSON**
+
+```go
+encoding, err := protox.ParseBytesEncoding("base58") // case-insensitive
+text := protox.EncodeBytes(encoding, data)
+```
 
 ## License
 

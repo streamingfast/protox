@@ -13,3 +13,13 @@
 - `IsWellKnownTimestampField` / `IsWellKnownGoogleField`: helpers to identify well-known `google.protobuf.*` fields
 - `EnumValueToString` / `EnumKnownValuesDebugString`: enum value utilities
 - `GetMessageExtensionValue` / `GetFieldExtensionValue`: typed extension value retrieval from message and field descriptors
+- `NewJSONMarshaller` / `ToJSON` / `ToJSONString`: human-oriented Protobuf to JSON rendering built on Go 1.27's `encoding/json/v2`. Not a `protojson` replacement — output is deliberately lossy and not round-trippable. Generated and dynamic messages render identically
+- JSON marshaller options: `WithJSONBytesEncoding`, `WithJSONBytesEncoder`, `WithJSONFieldCamelCase`, `WithJSONAlphabeticalFields`, `WithJSONEnumsAsNumbers`, `WithJSONInt64AsString`, `WithJSONWellKnownAsProto`, `WithoutJSONAnyTypeURL`, `WithJSONStrictAny`, `WithJSONAnyResolver`, `WithJSONAnyResolverOverride`, `WithoutJSONUnknownFields`, `WithJSONIndent`, `WithJSONEncodeOptions`
+- `RegisterAnyTypes` / `RegisterAnyFiles` / `AnyTypeResolver`: package-level registry of `google.protobuf.Any` payload types, private to protox and never writing to `protoregistry.GlobalTypes`
+- `ChainTypeResolvers`: compose several `protoregistry.MessageTypeResolver` values, which `google.golang.org/protobuf` does not provide
+- `BytesEncoding` / `ParseBytesEncoding` / `EncodeBytes`: hexadecimal, base58 and base64 bytes encoding, usable outside JSON rendering
+- `IsWellKnownGoogleMessage`: message-level counterpart to `IsWellKnownGoogleField`
+
+### Changed
+
+- Minimum Go version is now 1.27, required by `encoding/json/v2`
